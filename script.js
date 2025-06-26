@@ -7,11 +7,38 @@
     let sortState = { col: -1, dir: 1 };
 
     const headers = ["Host", "Title", "Status Code", "Technologies"];
+    
+    // Нормализация текста для сравнения
+    function normalizeText(text) {
+        return text.replace(/\s+/g, ' ').trim().toLowerCase();
+    }
+
     const extractors = {
-        "Host": row => row.querySelector("ul li:nth-child(1) a")?.textContent.trim() || "",
-        "Title": row => row.querySelector("ul li:nth-child(2) a")?.textContent.trim() || "",
-        "Status Code": row => row.querySelector("ul li:nth-child(3) a")?.textContent.trim() || "",
-        "Technologies": row => (row.querySelector("ul li:nth-child(4) a")?.textContent.trim() || "").replace(/[\[\]]/g, "").split(/\s+/).filter(Boolean)
+        "Host": row => {
+            const element = row.querySelector("ul li:nth-child(1) a");
+            return normalizeText(element?.textContent || "");
+        },
+        "Title": row => {
+            const element = row.querySelector("ul li:nth-child(2) a");
+            return normalizeText(element?.textContent || "");
+        },
+        "Status Code": row => {
+            const element = row.querySelector("ul li:nth-child(3) a");
+            return normalizeText(element?.textContent || "");
+        },
+        "Technologies": row => {
+            const element = row.querySelector("ul li:nth-child(4) a");
+            const text = element?.textContent || "";
+            if (!text || text.trim() === '[]') return [];
+            return text.replace(/[\[\]]/g, "").split(/\s+/).map(t => normalizeText(t)).filter(Boolean);
+        }
+    };
+
+    // Храним оригинальные значения для отображения
+    const displayValues = {
+        "Host": new Map(),
+        "Status Code": new Map(),
+        "Technologies": new Map()
     };
 
     const filters = {
@@ -27,11 +54,34 @@
     };
 
     function initFilters() {
+        // Сначала собираем все значения
         rows.forEach(row => {
-            filters["Host"].add(extractors["Host"](row));
-            filters["Status Code"].add(extractors["Status Code"](row));
-            extractors["Technologies"](row).forEach(t => filters["Technologies"].add(t));
+            const host = extractors["Host"](row);
+            const status = extractors["Status Code"](row);
+            const techs = extractors["Technologies"](row);
+            
+            // Сохраняем оригинальные значения для отображения
+            if (host) {
+                const originalHost = row.querySelector("ul li:nth-child(1) a")?.textContent.trim() || "";
+                displayValues["Host"].set(host, originalHost);
+                filters["Host"].add(host);
+            }
+            
+            if (status) {
+                const originalStatus = row.querySelector("ul li:nth-child(3) a")?.textContent.trim() || "";
+                displayValues["Status Code"].set(status, originalStatus);
+                filters["Status Code"].add(status);
+            }
+            
+            techs.forEach(t => {
+                if (t) {
+                    displayValues["Technologies"].set(t, t);
+                    filters["Technologies"].add(t);
+                }
+            });
         });
+
+        // Инициализируем выбранные фильтры
         Object.entries(filters).forEach(([key, values]) => {
             selectedFilters[key] = new Set(values);
         });
@@ -42,20 +92,20 @@
             const host = extractors["Host"](row);
             const status = extractors["Status Code"](row);
             const techs = extractors["Technologies"](row);
-            const visible =
-                selectedFilters["Host"].has(host) &&
-                selectedFilters["Status Code"].has(status) &&
-                (techs.length === 0 && selectedFilters["Technologies"].size === 0 ||
-                 techs.some(t => selectedFilters["Technologies"].has(t)));
-            row.style.display = visible ? "" : "none";
+
+            const hostMatch = selectedFilters["Host"].has(host);
+            const statusMatch = selectedFilters["Status Code"].has(status);
+            const techsMatch = techs.length === 0 || techs.some(t => selectedFilters["Technologies"].has(t));
+
+            row.style.display = (hostMatch && statusMatch && techsMatch) ? "" : "none";
         });
     }
 
     function createCheckboxes(label, items, key) {
         const wrapper = document.createElement("div");
-        wrapper.style.flex = "0 0 250px"; // Ширина столбцов фильтров
+        wrapper.style.flex = "0 0 250px";
         wrapper.style.marginRight = "10px";
-        wrapper.style.maxHeight = "180px"; // Меньше по вертикали
+        wrapper.style.maxHeight = "180px";
         wrapper.style.overflowY = "auto";
         wrapper.style.fontSize = "12px";
         wrapper.style.display = "flex";
@@ -78,7 +128,7 @@
         selectAll.addEventListener("click", () => {
             wrapper.querySelectorAll("input[type=checkbox]").forEach(cb => {
                 cb.checked = true;
-                selectedFilters[key].add(cb.dataset.value);
+                selectedFilters[key].add(normalizeText(cb.dataset.value));
             });
             applyFilters();
         });
@@ -90,7 +140,7 @@
         deselectAll.addEventListener("click", () => {
             wrapper.querySelectorAll("input[type=checkbox]").forEach(cb => {
                 cb.checked = false;
-                selectedFilters[key].delete(cb.dataset.value);
+                selectedFilters[key].delete(normalizeText(cb.dataset.value));
             });
             applyFilters();
         });
@@ -99,26 +149,37 @@
         btnWrap.appendChild(deselectAll);
         wrapper.appendChild(btnWrap);
 
-        Array.from(items).sort().forEach(value => {
-            const id = `${key}-${value}`;
+        // Используем Map для сортировки по оригинальным значениям
+        const sortedItems = Array.from(items)
+            .map(value => ({
+                normalized: value,
+                original: displayValues[key].get(value) || value
+            }))
+            .sort((a, b) => a.original.localeCompare(b.original));
+
+        sortedItems.forEach(({normalized, original}) => {
+            if (!normalized) return;
+            
+            const id = `${key}-${normalized}`;
             const checkbox = document.createElement("input");
             checkbox.type = "checkbox";
             checkbox.checked = true;
             checkbox.id = id;
-            checkbox.dataset.value = value;
+            checkbox.dataset.value = normalized;
             checkbox.style.marginRight = "4px";
+            
             checkbox.addEventListener("change", () => {
                 if (checkbox.checked) {
-                    selectedFilters[key].add(value);
+                    selectedFilters[key].add(normalized);
                 } else {
-                    selectedFilters[key].delete(value);
+                    selectedFilters[key].delete(normalized);
                 }
                 applyFilters();
             });
 
             const labelEl = document.createElement("label");
             labelEl.htmlFor = id;
-            labelEl.textContent = value;
+            labelEl.textContent = original;
             labelEl.style.display = "flex";
             labelEl.style.alignItems = "center";
             labelEl.style.whiteSpace = "nowrap";
@@ -137,7 +198,7 @@
         const ulItems = row.querySelectorAll("ul > li");
         if (!ulItems[index]) return "";
         const text = ulItems[index].textContent || "";
-        return text.replace(/^.*?:\s*/, "").trim().toLowerCase();
+        return normalizeText(text.replace(/^.*?:\s*/, ""));
     }
 
     function sortTableByColumn(colIndex) {
@@ -194,8 +255,8 @@
     filterPanel.style.position = "fixed";
     filterPanel.style.top = "0";
     filterPanel.style.left = "0";
-    filterPanel.style.right = "160px"; // оставляем место под sortPanel
-    filterPanel.style.height = "200px"; // уменьшено
+    filterPanel.style.right = "160px";
+    filterPanel.style.height = "200px";
     filterPanel.style.display = "flex";
     filterPanel.style.flexDirection = "row";
     filterPanel.style.padding = "10px";
@@ -212,5 +273,5 @@
 
     document.body.appendChild(filterPanel);
 
-    document.body.style.paddingTop = "250px"; // чтобы всё не перекрывало
+    document.body.style.paddingTop = "250px";
 })();
